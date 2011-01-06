@@ -40,6 +40,7 @@
 #include <xtables.h>
 #include <fcntl.h>
 #include <sys/utsname.h>
+#include <linux/mpls.h>
 #include "xshared.h"
 
 #ifndef TRUE
@@ -1669,12 +1670,20 @@ int do_command(int argc, char *argv[], char **table, struct iptc_handle **handle
 
 		case 'V':
 			if (invert)
-				printf("Not %s ;-)\n", prog_vers);
+				printf("Not %s mpls-linux %d.%d%d%d ;-)\n",
+						prog_vers,
+						(MPLS_LINUX_VERSION >> 24) & 0xFF,
+						(MPLS_LINUX_VERSION >> 16) & 0xFF,
+						(MPLS_LINUX_VERSION >> 8) & 0xFF,
+						(MPLS_LINUX_VERSION) & 0xFF);
 			else
-				printf("%s v%s\n",
-				       prog_name, prog_vers);
+				printf("%s v%s mpls-linux %d.%d%d%d\n",
+						prog_name, prog_vers,
+						(MPLS_LINUX_VERSION >> 24) & 0xFF,
+						(MPLS_LINUX_VERSION >> 16) & 0xFF,
+						(MPLS_LINUX_VERSION >> 8) & 0xFF,
+						(MPLS_LINUX_VERSION) & 0xFF);
 			exit(0);
-
 		case '0':
 			set_option(&options, OPT_LINENUMBERS, &fw.ip.invflags,
 				   invert);
