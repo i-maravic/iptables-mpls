@@ -15,9 +15,11 @@
  *	along with this program; if not, write to the Free Software
  *	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
-
+#include "config.h"
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <netdb.h>
 #include <stdarg.h>
 #include <stdbool.h>
@@ -27,9 +29,15 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statfs.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <arpa/inet.h>
+#if defined(HAVE_LINUX_MAGIC_H)
+#	include <linux/magic.h> /* for PROC_SUPER_MAGIC */
+#elif defined(HAVE_LINUX_PROC_FS_H)
+#	include <linux/proc_fs.h>	/* Linux 2.4 */
+#endif
 
 #include <xtables.h>
 #include <limits.h> /* INT_MAX in ip_tables.h/ip6_tables.h */
@@ -49,13 +57,20 @@
 #	define IP6T_SO_GET_REVISION_TARGET	69
 #endif
 #include <getopt.h>
-
+#include "iptables/internal.h"
+#include "xshared.h"
 
 #define NPROTO	255
 
 #ifndef PROC_SYS_MODPROBE
 #define PROC_SYS_MODPROBE "/proc/sys/kernel/modprobe"
 #endif
+
+/* we need this for ip6?tables-restore.  ip6?tables-restore.c sets line to the
+ * current line of the input file, in order  to give a more precise error
+ * message.  ip6?tables itself doesn't need this, so it is initialized to the
+ * magic number of -1 */
+int line = -1;
 
 void basic_exit_err(enum xtables_exittype status, const char *msg, ...) __attribute__((noreturn, format(printf,2,3)));
 
@@ -75,8 +90,10 @@ void basic_exit_err(enum xtables_exittype status, const char *msg, ...)
 
 void xtables_free_opts(int unused)
 {
-	if (xt_params->opts != xt_params->orig_opts)
+	if (xt_params->opts != xt_params->orig_opts) {
 		free(xt_params->opts);
+		xt_params->opts = NULL;
+	}
 }
 
 struct option *xtables_merge_options(struct option *orig_opts,
@@ -95,6 +112,13 @@ struct option *xtables_merge_options(struct option *orig_opts,
 		for (num_old = 0; oldopts[num_old].name; num_old++) ;
 	for (num_new = 0; newopts[num_new].name; num_new++) ;
 
+	/*
+	 * Since @oldopts also has @orig_opts already (and does so at the
+	 * start), skip these entries.
+	 */
+	oldopts += num_oold;
+	num_old -= num_oold;
+
 	merge = malloc(sizeof(*mp) * (num_oold + num_old + num_new + 1));
 	if (merge == NULL)
 		return NULL;
@@ -103,12 +127,8 @@ struct option *xtables_merge_options(struct option *orig_opts,
 	memcpy(merge, orig_opts, sizeof(*mp) * num_oold);
 	mp = merge + num_oold;
 
-	/* Since @opts also has @orig_opts already, skip the entries */
-	oldopts += num_oold;
-	num_old -= num_oold;
-
 	/* Second, the new options */
-	xt_params->option_offset += 256;
+	xt_params->option_offset += XT_OPTION_OFFSET_SCALE;
 	*option_offset = xt_params->option_offset;
 	memcpy(mp, newopts, sizeof(*mp) * num_new);
 
@@ -125,26 +145,9 @@ struct option *xtables_merge_options(struct option *orig_opts,
 	return merge;
 }
 
-/**
- * xtables_afinfo - protocol family dependent information
- * @kmod:		kernel module basename (e.g. "ip_tables")
- * @libprefix:		prefix of .so library name (e.g. "libipt_")
- * @family:		nfproto family
- * @ipproto:		used by setsockopt (e.g. IPPROTO_IP)
- * @so_rev_match:	optname to check revision support of match
- * @so_rev_target:	optname to check revision support of target
- */
-struct xtables_afinfo {
-	const char *kmod;
-	const char *libprefix;
-	uint8_t family;
-	uint8_t ipproto;
-	int so_rev_match;
-	int so_rev_target;
-};
-
 static const struct xtables_afinfo afinfo_ipv4 = {
 	.kmod          = "ip_tables",
+	.proc_exists   = "/proc/net/ip_tables_names",
 	.libprefix     = "libipt_",
 	.family	       = NFPROTO_IPV4,
 	.ipproto       = IPPROTO_IP,
@@ -154,6 +157,7 @@ static const struct xtables_afinfo afinfo_ipv4 = {
 
 static const struct xtables_afinfo afinfo_ipv6 = {
 	.kmod          = "ip6_tables",
+	.proc_exists   = "/proc/net/ip6_tables_names",
 	.libprefix     = "libip6t_",
 	.family        = NFPROTO_IPV6,
 	.ipproto       = IPPROTO_IPV6,
@@ -161,7 +165,7 @@ static const struct xtables_afinfo afinfo_ipv6 = {
 	.so_rev_target = IP6T_SO_GET_REVISION_TARGET,
 };
 
-static const struct xtables_afinfo *afinfo;
+const struct xtables_afinfo *afinfo;
 
 /* Search path for Xtables .so files */
 static const char *xtables_libdir;
@@ -169,9 +173,17 @@ static const char *xtables_libdir;
 /* the path to command to load kernel module */
 const char *xtables_modprobe_program;
 
-/* Keeping track of external matches and targets: linked lists.  */
+/* Keep track of matches/targets pending full registration: linked lists. */
+struct xtables_match *xtables_pending_matches;
+struct xtables_target *xtables_pending_targets;
+
+/* Keep track of fully registered external matches/targets: linked lists. */
 struct xtables_match *xtables_matches;
 struct xtables_target *xtables_targets;
+
+/* Fully register a match/target which was previously partially registered. */
+static void xtables_fully_register_pending_match(struct xtables_match *me);
+static void xtables_fully_register_pending_target(struct xtables_target *me);
 
 void xtables_init(void)
 {
@@ -295,6 +307,11 @@ static char *get_modprobe(void)
 	procfile = open(PROC_SYS_MODPROBE, O_RDONLY);
 	if (procfile < 0)
 		return NULL;
+	if (fcntl(procfile, F_SETFD, FD_CLOEXEC) == -1) {
+		fprintf(stderr, "Could not set close on exec: %s\n",
+			strerror(errno));
+		exit(1);
+	}
 
 	ret = malloc(PROCFILE_BUFSIZ);
 	if (ret) {
@@ -350,6 +367,7 @@ int xtables_insmod(const char *modname, const char *modprobe, bool quiet)
 		/* not usually reached */
 		exit(1);
 	case -1:
+		free(buf);
 		return -1;
 
 	default: /* parent */
@@ -362,15 +380,39 @@ int xtables_insmod(const char *modname, const char *modprobe, bool quiet)
 	return -1;
 }
 
+/* return true if a given file exists within procfs */
+static bool proc_file_exists(const char *filename)
+{
+	struct stat s;
+	struct statfs f;
+
+	if (lstat(filename, &s))
+		return false;
+	if (!S_ISREG(s.st_mode))
+		return false;
+	if (statfs(filename, &f))
+		return false;
+	if (f.f_type != PROC_SUPER_MAGIC)
+		return false;
+	return true;
+}
+
 int xtables_load_ko(const char *modprobe, bool quiet)
 {
 	static bool loaded = false;
-	static int ret = -1;
+	int ret;
 
-	if (!loaded) {
-		ret = xtables_insmod(afinfo->kmod, modprobe, quiet);
-		loaded = (ret == 0);
-	}
+	if (loaded)
+		return 0;
+
+	if (proc_file_exists(afinfo->proc_exists)) {
+		loaded = true;
+		return 0;
+	};
+
+	ret = xtables_insmod(afinfo->kmod, modprobe, quiet);
+	if (ret == 0)
+		loaded = true;
 
 	return ret;
 }
@@ -391,15 +433,20 @@ int xtables_load_ko(const char *modprobe, bool quiet)
  * Returns true/false whether number was accepted. On failure, *value has
  * undefined contents.
  */
-bool xtables_strtoul(const char *s, char **end, unsigned long *value,
-                     unsigned long min, unsigned long max)
+bool xtables_strtoul(const char *s, char **end, uintmax_t *value,
+                     uintmax_t min, uintmax_t max)
 {
-	unsigned long v;
+	uintmax_t v;
+	const char *p;
 	char *my_end;
 
 	errno = 0;
-	v = strtoul(s, &my_end, 0);
-
+	/* Since strtoul allows leading minus, we have to check for ourself. */
+	for (p = s; isspace(*p); ++p)
+		;
+	if (*p == '-')
+		return false;
+	v = strtoumax(s, &my_end, 0);
 	if (my_end == s)
 		return false;
 	if (end != NULL)
@@ -419,7 +466,7 @@ bool xtables_strtoul(const char *s, char **end, unsigned long *value,
 bool xtables_strtoui(const char *s, char **end, unsigned int *value,
                      unsigned int min, unsigned int max)
 {
-	unsigned long v;
+	uintmax_t v;
 	bool ret;
 
 	ret = xtables_strtoul(s, end, &v, min, max);
@@ -438,7 +485,7 @@ int xtables_service_to_port(const char *name, const char *proto)
 	return -1;
 }
 
-u_int16_t xtables_parse_port(const char *port, const char *proto)
+uint16_t xtables_parse_port(const char *port, const char *proto)
 {
 	unsigned int portnum;
 
@@ -489,9 +536,11 @@ void xtables_parse_interface(const char *arg, char *vianame,
 }
 
 #ifndef NO_SHARED_LIBS
-static void *load_extension(const char *search_path, const char *prefix,
+static void *load_extension(const char *search_path, const char *af_prefix,
     const char *name, bool is_target)
 {
+	const char *all_prefixes[] = {"libxt_", af_prefix, NULL};
+	const char **prefix;
 	const char *dir = search_path, *next;
 	void *ptr = NULL;
 	struct stat sb;
@@ -501,39 +550,38 @@ static void *load_extension(const char *search_path, const char *prefix,
 		next = strchr(dir, ':');
 		if (next == NULL)
 			next = dir + strlen(dir);
-		snprintf(path, sizeof(path), "%.*s/libxt_%s.so",
-		         (unsigned int)(next - dir), dir, name);
 
-		if (dlopen(path, RTLD_NOW) != NULL) {
-			/* Found library.  If it didn't register itself,
-			   maybe they specified target as match. */
+		for (prefix = all_prefixes; *prefix != NULL; ++prefix) {
+			snprintf(path, sizeof(path), "%.*s/%s%s.so",
+			         (unsigned int)(next - dir), dir,
+			         *prefix, name);
+
+			if (stat(path, &sb) != 0) {
+				if (errno == ENOENT)
+					continue;
+				fprintf(stderr, "%s: %s\n", path,
+					strerror(errno));
+				return NULL;
+			}
+			if (dlopen(path, RTLD_NOW) == NULL) {
+				fprintf(stderr, "%s: %s\n", path, dlerror());
+				break;
+			}
+
 			if (is_target)
 				ptr = xtables_find_target(name, XTF_DONT_LOAD);
 			else
 				ptr = xtables_find_match(name,
 				      XTF_DONT_LOAD, NULL);
-		} else if (stat(path, &sb) == 0) {
-			fprintf(stderr, "%s: %s\n", path, dlerror());
+
+			if (ptr != NULL)
+				return ptr;
+
+			fprintf(stderr, "%s: no \"%s\" extension found for "
+				"this protocol\n", path, name);
+			errno = ENOENT;
+			return NULL;
 		}
-
-		if (ptr != NULL)
-			return ptr;
-
-		snprintf(path, sizeof(path), "%.*s/%s%s.so",
-		         (unsigned int)(next - dir), dir, prefix, name);
-		if (dlopen(path, RTLD_NOW) != NULL) {
-			if (is_target)
-				ptr = xtables_find_target(name, XTF_DONT_LOAD);
-			else
-				ptr = xtables_find_match(name,
-				      XTF_DONT_LOAD, NULL);
-		} else if (stat(path, &sb) == 0) {
-			fprintf(stderr, "%s: %s\n", path, dlerror());
-		}
-
-		if (ptr != NULL)
-			return ptr;
-
 		dir = next + 1;
 	} while (*next != '\0');
 
@@ -545,6 +593,7 @@ struct xtables_match *
 xtables_find_match(const char *name, enum xtables_tryload tryload,
 		   struct xtables_rule_match **matches)
 {
+	struct xtables_match **dptr;
 	struct xtables_match *ptr;
 	const char *icmp6 = "icmp6";
 
@@ -560,6 +609,18 @@ xtables_find_match(const char *name, enum xtables_tryload tryload,
 	     (strcmp(name,"icmp6") == 0) )
 		name = icmp6;
 
+	/* Trigger delayed initialization */
+	for (dptr = &xtables_pending_matches; *dptr; ) {
+		if (strcmp(name, (*dptr)->name) == 0) {
+			ptr = *dptr;
+			*dptr = (*dptr)->next;
+			ptr->next = NULL;
+			xtables_fully_register_pending_match(ptr);
+		} else {
+			dptr = &((*dptr)->next);
+		}
+	}
+
 	for (ptr = xtables_matches; ptr; ptr = ptr->next) {
 		if (strcmp(name, ptr->name) == 0) {
 			struct xtables_match *clone;
@@ -571,6 +632,7 @@ xtables_find_match(const char *name, enum xtables_tryload tryload,
 			/* Second and subsequent clones */
 			clone = xtables_malloc(sizeof(struct xtables_match));
 			memcpy(clone, ptr, sizeof(struct xtables_match));
+			clone->udata = NULL;
 			clone->mflags = 0;
 			/* This is a clone: */
 			clone->next = clone;
@@ -588,7 +650,7 @@ xtables_find_match(const char *name, enum xtables_tryload tryload,
 		if (ptr == NULL && tryload == XTF_LOAD_MUST_SUCCEED)
 			xt_params->exit_err(PARAMETER_PROBLEM,
 				   "Couldn't load match `%s':%s\n",
-				   name, dlerror());
+				   name, strerror(errno));
 	}
 #else
 	if (ptr && !ptr->loaded) {
@@ -625,6 +687,7 @@ xtables_find_match(const char *name, enum xtables_tryload tryload,
 struct xtables_target *
 xtables_find_target(const char *name, enum xtables_tryload tryload)
 {
+	struct xtables_target **dptr;
 	struct xtables_target *ptr;
 
 	/* Standard target? */
@@ -634,6 +697,18 @@ xtables_find_target(const char *name, enum xtables_tryload tryload)
 	    || strcmp(name, XTC_LABEL_QUEUE) == 0
 	    || strcmp(name, XTC_LABEL_RETURN) == 0)
 		name = "standard";
+
+	/* Trigger delayed initialization */
+	for (dptr = &xtables_pending_targets; *dptr; ) {
+		if (strcmp(name, (*dptr)->name) == 0) {
+			ptr = *dptr;
+			*dptr = (*dptr)->next;
+			ptr->next = NULL;
+			xtables_fully_register_pending_target(ptr);
+		} else {
+			dptr = &((*dptr)->next);
+		}
+	}
 
 	for (ptr = xtables_targets; ptr; ptr = ptr->next) {
 		if (strcmp(name, ptr->name) == 0)
@@ -648,7 +723,7 @@ xtables_find_target(const char *name, enum xtables_tryload tryload)
 		if (ptr == NULL && tryload == XTF_LOAD_MUST_SUCCEED)
 			xt_params->exit_err(PARAMETER_PROBLEM,
 				   "Couldn't load target `%s':%s\n",
-				   name, dlerror());
+				   name, strerror(errno));
 	}
 #else
 	if (ptr && !ptr->loaded) {
@@ -669,7 +744,7 @@ xtables_find_target(const char *name, enum xtables_tryload tryload)
 	return ptr;
 }
 
-static int compatible_revision(const char *name, u_int8_t revision, int opt)
+static int compatible_revision(const char *name, uint8_t revision, int opt)
 {
 	struct xt_get_revision rev;
 	socklen_t s = sizeof(rev);
@@ -680,13 +755,19 @@ static int compatible_revision(const char *name, u_int8_t revision, int opt)
 		if (errno == EPERM) {
 			/* revision 0 is always supported. */
 			if (revision != 0)
-				fprintf(stderr, "Could not determine whether "
+				fprintf(stderr, "%s: Could not determine whether "
 						"revision %u is supported, "
 						"assuming it is.\n",
-					revision);
+					name, revision);
 			return 1;
 		}
 		fprintf(stderr, "Could not open socket to kernel: %s\n",
+			strerror(errno));
+		exit(1);
+	}
+
+	if (fcntl(sockfd, F_SETFD, FD_CLOEXEC) == -1) {
+		fprintf(stderr, "Could not set close on exec: %s\n",
 			strerror(errno));
 		exit(1);
 	}
@@ -717,20 +798,29 @@ static int compatible_revision(const char *name, u_int8_t revision, int opt)
 }
 
 
-static int compatible_match_revision(const char *name, u_int8_t revision)
+static int compatible_match_revision(const char *name, uint8_t revision)
 {
 	return compatible_revision(name, revision, afinfo->so_rev_match);
 }
 
-static int compatible_target_revision(const char *name, u_int8_t revision)
+static int compatible_target_revision(const char *name, uint8_t revision)
 {
 	return compatible_revision(name, revision, afinfo->so_rev_target);
 }
 
+static void xtables_check_options(const char *name, const struct option *opt)
+{
+	for (; opt->name != NULL; ++opt)
+		if (opt->val < 0 || opt->val >= XT_OPTION_OFFSET_SCALE) {
+			fprintf(stderr, "%s: Extension %s uses invalid "
+			        "option value %d\n",xt_params->program_name,
+			        name, opt->val);
+			exit(1);
+		}
+}
+
 void xtables_register_match(struct xtables_match *me)
 {
-	struct xtables_match **i, *old;
-
 	if (me->version == NULL) {
 		fprintf(stderr, "%s: match %s<%u> is missing a version\n",
 		        xt_params->program_name, me->name, me->revision);
@@ -745,7 +835,7 @@ void xtables_register_match(struct xtables_match *me)
 	}
 
 	if (strlen(me->name) >= XT_EXTENSION_MAXNAMELEN) {
-		fprintf(stderr, "%s: target `%s' has invalid name\n",
+		fprintf(stderr, "%s: match `%s' has invalid name\n",
 			xt_params->program_name, me->name);
 		exit(1);
 	}
@@ -757,9 +847,23 @@ void xtables_register_match(struct xtables_match *me)
 		exit(1);
 	}
 
+	if (me->x6_options != NULL)
+		xtables_option_metavalidate(me->name, me->x6_options);
+	if (me->extra_opts != NULL)
+		xtables_check_options(me->name, me->extra_opts);
+
 	/* ignore not interested match */
 	if (me->family != afinfo->family && me->family != AF_UNSPEC)
 		return;
+
+	/* place on linked list of matches pending full registration */
+	me->next = xtables_pending_matches;
+	xtables_pending_matches = me;
+}
+
+static void xtables_fully_register_pending_match(struct xtables_match *me)
+{
+	struct xtables_match **i, *old;
 
 	old = xtables_find_match(me->name, XTF_DURING_LOAD, NULL);
 	if (old) {
@@ -814,8 +918,6 @@ void xtables_register_matches(struct xtables_match *match, unsigned int n)
 
 void xtables_register_target(struct xtables_target *me)
 {
-	struct xtables_target *old;
-
 	if (me->version == NULL) {
 		fprintf(stderr, "%s: target %s<%u> is missing a version\n",
 		        xt_params->program_name, me->name, me->revision);
@@ -842,9 +944,23 @@ void xtables_register_target(struct xtables_target *me)
 		exit(1);
 	}
 
+	if (me->x6_options != NULL)
+		xtables_option_metavalidate(me->name, me->x6_options);
+	if (me->extra_opts != NULL)
+		xtables_check_options(me->name, me->extra_opts);
+
 	/* ignore not interested target */
 	if (me->family != afinfo->family && me->family != AF_UNSPEC)
 		return;
+
+	/* place on linked list of targets pending full registration */
+	me->next = xtables_pending_targets;
+	xtables_pending_targets = me;
+}
+
+static void xtables_fully_register_pending_target(struct xtables_target *me)
+{
+	struct xtables_target *old;
 
 	old = xtables_find_target(me->name, XTF_DURING_LOAD);
 	if (old) {
@@ -933,8 +1049,10 @@ void xtables_param_act(unsigned int status, const char *p1, ...)
 	case XTF_ONLY_ONCE:
 		p2 = va_arg(args, const char *);
 		b  = va_arg(args, unsigned int);
-		if (!b)
+		if (!b) {
+			va_end(args);
 			return;
+		}
 		xt_params->exit_err(PARAMETER_PROBLEM,
 		           "%s: \"%s\" option may only be specified once",
 		           p1, p2);
@@ -942,8 +1060,10 @@ void xtables_param_act(unsigned int status, const char *p1, ...)
 	case XTF_NO_INVERT:
 		p2 = va_arg(args, const char *);
 		b  = va_arg(args, unsigned int);
-		if (!b)
+		if (!b) {
+			va_end(args);
 			return;
+		}
 		xt_params->exit_err(PARAMETER_PROBLEM,
 		           "%s: \"%s\" option cannot be inverted", p1, p2);
 		break;
@@ -956,8 +1076,10 @@ void xtables_param_act(unsigned int status, const char *p1, ...)
 		break;
 	case XTF_ONE_ACTION:
 		b = va_arg(args, unsigned int);
-		if (!b)
+		if (!b) {
+			va_end(args);
 			return;
+		}
 		xt_params->exit_err(PARAMETER_PROBLEM,
 		           "%s: At most one action is possible", p1);
 		break;
@@ -1120,7 +1242,7 @@ static struct in_addr *host_to_ipaddr(const char *name, unsigned int *naddr)
 
 		while (host->h_addr_list[*naddr] != NULL)
 			++*naddr;
-		addr = xtables_calloc(*naddr, sizeof(struct in_addr) * *naddr);
+		addr = xtables_calloc(*naddr, sizeof(struct in_addr));
 		for (i = 0; i < *naddr; i++)
 			memcpy(&addr[i], host->h_addr_list[i],
 			       sizeof(struct in_addr));
@@ -1178,7 +1300,7 @@ void xtables_ipparse_multiple(const char *name, struct in_addr **addrpp,
                               struct in_addr **maskpp, unsigned int *naddrs)
 {
 	struct in_addr *addrp;
-	char buf[256], *p;
+	char buf[256], *p, *next;
 	unsigned int len, i, j, n, count = 1;
 	const char *loop = name;
 
@@ -1193,23 +1315,19 @@ void xtables_ipparse_multiple(const char *name, struct in_addr **addrpp,
 	loop = name;
 
 	for (i = 0; i < count; ++i) {
-		if (loop == NULL)
-			break;
-		if (*loop == ',')
+		while (isspace(*loop))
 			++loop;
-		if (*loop == '\0')
-			break;
-		p = strchr(loop, ',');
-		if (p != NULL)
-			len = p - loop;
+		next = strchr(loop, ',');
+		if (next != NULL)
+			len = next - loop;
 		else
 			len = strlen(loop);
-		if (len == 0 || sizeof(buf) - 1 < len)
-			break;
+		if (len > sizeof(buf) - 1)
+			xt_params->exit_err(PARAMETER_PROBLEM,
+				"Hostname too long");
 
 		strncpy(buf, loop, len);
 		buf[len] = '\0';
-		loop += len;
 		if ((p = strrchr(buf, '/')) != NULL) {
 			*p = '\0';
 			addrp = parse_ipmask(p + 1);
@@ -1247,9 +1365,12 @@ void xtables_ipparse_multiple(const char *name, struct in_addr **addrpp,
 		}
 		/* free what ipparse_hostnetwork had allocated: */
 		free(addrp);
+		if (next == NULL)
+			break;
+		loop = next + 1;
 	}
 	*naddrs = count;
-	for (i = 0; i < n; ++i)
+	for (i = 0; i < count; ++i)
 		(*addrpp+i)->s_addr &= (*maskpp+i)->s_addr;
 }
 
@@ -1288,8 +1409,13 @@ void xtables_ipparse_any(const char *name, struct in_addr **addrpp,
 		addrp[j++].s_addr &= maskp->s_addr;
 		for (k = 0; k < j - 1; ++k)
 			if (addrp[k].s_addr == addrp[j-1].s_addr) {
-				--*naddrs;
-				--j;
+				/*
+				 * Nuke the dup by copying an address from the
+				 * tail here, and check the current position
+				 * again (--j).
+				 */
+				memcpy(&addrp[--j], &addrp[--*naddrs],
+				       sizeof(struct in_addr));
 				break;
 			}
 	}
@@ -1297,7 +1423,7 @@ void xtables_ipparse_any(const char *name, struct in_addr **addrpp,
 
 const char *xtables_ip6addr_to_numeric(const struct in6_addr *addrp)
 {
-	/* 0000:0000:0000:0000:0000:000.000.000.000
+	/* 0000:0000:0000:0000:0000:0000:000.000.000.000
 	 * 0000:0000:0000:0000:0000:0000:0000:0000 */
 	static char buf[50+1];
 	return inet_ntop(AF_INET6, addrp, buf, sizeof(buf));
@@ -1392,17 +1518,16 @@ struct in6_addr *xtables_numeric_to_ip6addr(const char *num)
 static struct in6_addr *
 host_to_ip6addr(const char *name, unsigned int *naddr)
 {
-	static struct in6_addr *addr;
+	struct in6_addr *addr;
 	struct addrinfo hints;
-	struct addrinfo *res;
+	struct addrinfo *res, *p;
 	int err;
+	unsigned int i;
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_flags    = AI_CANONNAME;
 	hints.ai_family   = AF_INET6;
 	hints.ai_socktype = SOCK_RAW;
-	hints.ai_protocol = IPPROTO_IPV6;
-	hints.ai_next     = NULL;
 
 	*naddr = 0;
 	if ((err = getaddrinfo(name, NULL, &hints, &res)) != 0) {
@@ -1411,20 +1536,20 @@ host_to_ip6addr(const char *name, unsigned int *naddr)
 #endif
 		return NULL;
 	} else {
-		if (res->ai_family != AF_INET6 ||
-		    res->ai_addrlen != sizeof(struct sockaddr_in6))
-			return NULL;
-
+		/* Find length of address chain */
+		for (p = res; p != NULL; p = p->ai_next)
+			++*naddr;
 #ifdef DEBUG
 		fprintf(stderr, "resolved: len=%d  %s ", res->ai_addrlen,
 		        xtables_ip6addr_to_numeric(&((struct sockaddr_in6 *)res->ai_addr)->sin6_addr));
 #endif
-		/* Get the first element of the address-chain */
-		addr = xtables_malloc(sizeof(struct in6_addr));
-		memcpy(addr, &((const struct sockaddr_in6 *)res->ai_addr)->sin6_addr,
-		       sizeof(struct in6_addr));
+		/* Copy each element of the address chain */
+		addr = xtables_calloc(*naddr, sizeof(struct in6_addr));
+		for (i = 0, p = res; p != NULL; p = p->ai_next)
+			memcpy(&addr[i++],
+			       &((const struct sockaddr_in6 *)p->ai_addr)->sin6_addr,
+			       sizeof(struct in6_addr));
 		freeaddrinfo(res);
-		*naddr = 1;
 		return addr;
 	}
 
@@ -1491,7 +1616,7 @@ xtables_ip6parse_multiple(const char *name, struct in6_addr **addrpp,
 {
 	static const struct in6_addr zero_addr;
 	struct in6_addr *addrp;
-	char buf[256], *p;
+	char buf[256], *p, *next;
 	unsigned int len, i, j, n, count = 1;
 	const char *loop = name;
 
@@ -1506,23 +1631,19 @@ xtables_ip6parse_multiple(const char *name, struct in6_addr **addrpp,
 	loop = name;
 
 	for (i = 0; i < count /*NB: count can grow*/; ++i) {
-		if (loop == NULL)
-			break;
-		if (*loop == ',')
+		while (isspace(*loop))
 			++loop;
-		if (*loop == '\0')
-			break;
-		p = strchr(loop, ',');
-		if (p != NULL)
-			len = p - loop;
+		next = strchr(loop, ',');
+		if (next != NULL)
+			len = next - loop;
 		else
 			len = strlen(loop);
-		if (len == 0 || sizeof(buf) - 1 < len)
-			break;
+		if (len > sizeof(buf) - 1)
+			xt_params->exit_err(PARAMETER_PROBLEM,
+				"Hostname too long");
 
 		strncpy(buf, loop, len);
 		buf[len] = '\0';
-		loop += len;
 		if ((p = strrchr(buf, '/')) != NULL) {
 			*p = '\0';
 			addrp = parse_ip6mask(p + 1);
@@ -1536,12 +1657,6 @@ xtables_ip6parse_multiple(const char *name, struct in6_addr **addrpp,
 			strcpy(buf, "::");
 
 		addrp = ip6parse_hostnetwork(buf, &n);
-		/* ip6parse_hostnetwork only ever returns one IP
-		address (it exits if the resolution fails).
-		Therefore, n will always be 1 here.  Leaving the
-		code below in anyway in case ip6parse_hostnetwork
-		is improved some day to behave like
-		ipparse_hostnetwork: */
 		if (n > 1) {
 			count += n - 1;
 			*addrpp = xtables_realloc(*addrpp,
@@ -1562,9 +1677,12 @@ xtables_ip6parse_multiple(const char *name, struct in6_addr **addrpp,
 		}
 		/* free what ip6parse_hostnetwork had allocated: */
 		free(addrp);
+		if (next == NULL)
+			break;
+		loop = next + 1;
 	}
 	*naddrs = count;
-	for (i = 0; i < n; ++i)
+	for (i = 0; i < count; ++i)
 		for (j = 0; j < 4; ++j)
 			(*addrpp+i)->s6_addr32[j] &= (*maskpp+i)->s6_addr32[j];
 }
@@ -1599,8 +1717,13 @@ void xtables_ip6parse_any(const char *name, struct in6_addr **addrpp,
 		++j;
 		for (k = 0; k < j - 1; ++k)
 			if (IN6_ARE_ADDR_EQUAL(&addrp[k], &addrp[j - 1])) {
-				--*naddrs;
-				--j;
+				/*
+				 * Nuke the dup by copying an address from the
+				 * tail here, and check the current position
+				 * again (--j).
+				 */
+				memcpy(&addrp[--j], &addrp[--*naddrs],
+				       sizeof(struct in_addr));
 				break;
 			}
 	}
@@ -1615,17 +1738,17 @@ void xtables_save_string(const char *value)
 	size_t length;
 	const char *p;
 
-	length = strcspn(value, no_quote_chars);
+	length = strspn(value, no_quote_chars);
 	if (length > 0 && value[length] == 0) {
 		/* no quoting required */
-		fputs(value, stdout);
 		putchar(' ');
+		fputs(value, stdout);
 	} else {
 		/* there is at least one dangerous character in the
 		   value, which we have to quote.  Write double quotes
 		   around the value and escape special characters with
 		   a backslash */
-		putchar('"');
+		printf(" \"");
 
 		for (p = strpbrk(value, escape_chars); p != NULL;
 		     p = strpbrk(value, escape_chars)) {
@@ -1639,37 +1762,8 @@ void xtables_save_string(const char *value)
 		/* print the rest and finish the double quoted
 		   string */
 		fputs(value, stdout);
-		printf("\" ");
+		putchar('\"');
 	}
-}
-
-/**
- * Check for option-intrapositional negation.
- * Do not use in new code.
- */
-int xtables_check_inverse(const char option[], int *invert,
-			  int *my_optind, int argc, char **argv)
-{
-	if (option == NULL || strcmp(option, "!") != 0)
-		return false;
-
-	fprintf(stderr, "Using intrapositioned negation "
-	        "(`--option ! this`) is deprecated in favor of "
-	        "extrapositioned (`! --option this`).\n");
-
-	if (*invert)
-		xt_params->exit_err(PARAMETER_PROBLEM,
-			   "Multiple `!' flags not allowed");
-	*invert = true;
-	if (my_optind != NULL) {
-		optarg = argv[*my_optind];
-		++*my_optind;
-		if (argc && *my_optind > argc)
-			xt_params->exit_err(PARAMETER_PROBLEM,
-				   "no argument following `!'");
-	}
-
-	return true;
 }
 
 const struct xtables_pprot xtables_chain_protos[] = {
@@ -1688,40 +1782,33 @@ const struct xtables_pprot xtables_chain_protos[] = {
 	{NULL},
 };
 
-u_int16_t
+uint16_t
 xtables_parse_protocol(const char *s)
 {
-	unsigned int proto;
+	const struct protoent *pent;
+	unsigned int proto, i;
 
-	if (!xtables_strtoui(s, NULL, &proto, 0, UINT8_MAX)) {
-		struct protoent *pent;
+	if (xtables_strtoui(s, NULL, &proto, 0, UINT8_MAX))
+		return proto;
 
-		/* first deal with the special case of 'all' to prevent
-		 * people from being able to redefine 'all' in nsswitch
-		 * and/or provoke expensive [not working] ldap/nis/...
-		 * lookups */
-		if (!strcmp(s, "all"))
-			return 0;
+	/* first deal with the special case of 'all' to prevent
+	 * people from being able to redefine 'all' in nsswitch
+	 * and/or provoke expensive [not working] ldap/nis/...
+	 * lookups */
+	if (strcmp(s, "all") == 0)
+		return 0;
 
-		if ((pent = getprotobyname(s)))
-			proto = pent->p_proto;
-		else {
-			unsigned int i;
-			for (i = 0; i < ARRAY_SIZE(xtables_chain_protos); ++i) {
-				if (xtables_chain_protos[i].name == NULL)
-					continue;
+	pent = getprotobyname(s);
+	if (pent != NULL)
+		return pent->p_proto;
 
-				if (strcmp(s, xtables_chain_protos[i].name) == 0) {
-					proto = xtables_chain_protos[i].num;
-					break;
-				}
-			}
-			if (i == ARRAY_SIZE(xtables_chain_protos))
-				xt_params->exit_err(PARAMETER_PROBLEM,
-					   "unknown protocol `%s' specified",
-					   s);
-		}
+	for (i = 0; i < ARRAY_SIZE(xtables_chain_protos); ++i) {
+		if (xtables_chain_protos[i].name == NULL)
+			continue;
+		if (strcmp(s, xtables_chain_protos[i].name) == 0)
+			return xtables_chain_protos[i].num;
 	}
-
-	return proto;
+	xt_params->exit_err(PARAMETER_PROBLEM,
+		"unknown protocol \"%s\" specified", s);
+	return -1;
 }

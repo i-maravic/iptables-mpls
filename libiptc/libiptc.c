@@ -31,6 +31,7 @@
  */
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <stdbool.h>
 #include <xtables.h>
 
 #include "linux_list.h"
@@ -402,7 +403,7 @@ __iptcc_bsearch_chain_index(const char *name, unsigned int offset,
 		}
 		debug("jump back to pos:%d (end:%d)\n", pos, end);
 		goto loop;
-	} else if (res > 0 ){ /* Not far enough, jump forward */
+	} else { /* res > 0; Not far enough, jump forward */
 
 		/* Exit case: Last element of array */
 		if (pos == handle->chain_index_sz-1) {
@@ -429,8 +430,6 @@ __iptcc_bsearch_chain_index(const char *name, unsigned int offset,
 		debug("jump forward to pos:%d (end:%d)\n", pos, end);
 		goto loop;
 	}
-
-	return list_pos;
 }
 
 /* Wrapper for string chain name based bsearch */
@@ -607,7 +606,7 @@ static int iptcc_chain_index_rebuild(struct xtc_handle *h)
  */
 static int iptcc_chain_index_delete_chain(struct chain_head *c, struct xtc_handle *h)
 {
-	struct list_head *index_ptr, *index_ptr2, *next;
+	struct list_head *index_ptr, *next;
 	struct chain_head *c2;
 	unsigned int idx, idx2;
 
@@ -627,7 +626,7 @@ static int iptcc_chain_index_delete_chain(struct chain_head *c, struct xtc_handl
 		 * is located in the same index bucket.
 		 */
 		c2         = list_entry(next, struct chain_head, list);
-		index_ptr2 = iptcc_bsearch_chain_index(c2->name, &idx2, h);
+		iptcc_bsearch_chain_index(c2->name, &idx2, h);
 		if (idx != idx2) {
 			/* Rebuild needed */
 			return iptcc_chain_index_rebuild(h);
@@ -1278,10 +1277,7 @@ static int iptcc_compile_table(struct xtc_handle *h, STRUCT_REPLACE *repl)
 static struct xtc_handle *
 alloc_handle(const char *tablename, unsigned int size, unsigned int num_rules)
 {
-	size_t len;
 	struct xtc_handle *h;
-
-	len = sizeof(STRUCT_TC_HANDLE) + size;
 
 	h = malloc(sizeof(STRUCT_TC_HANDLE));
 	if (!h) {
@@ -1956,12 +1952,11 @@ is_same(const STRUCT_ENTRY *a,
 	const STRUCT_ENTRY *b,
 	unsigned char *matchmask);
 
-/* Delete the first rule in `chain' which matches `fw'. */
-int
-TC_DELETE_ENTRY(const IPT_CHAINLABEL chain,
-		const STRUCT_ENTRY *origfw,
-		unsigned char *matchmask,
-		struct xtc_handle *handle)
+
+/* find the first rule in `chain' which matches `fw' and remove it unless dry_run is set */
+static int delete_entry(const IPT_CHAINLABEL chain, const STRUCT_ENTRY *origfw,
+			unsigned char *matchmask, struct xtc_handle *handle,
+			bool dry_run)
 {
 	struct chain_head *c;
 	struct rule_head *r, *i;
@@ -2005,6 +2000,10 @@ TC_DELETE_ENTRY(const IPT_CHAINLABEL chain,
 		if (!target_same(r, i, mask))
 			continue;
 
+		/* if we are just doing a dry run, we simply skip the rest */
+		if (dry_run)
+			return 1;
+
 		/* If we are about to delete the rule that is the
 		 * current iterator, move rule iterator back.  next
 		 * pointer will then point to real next node */
@@ -2027,6 +2026,20 @@ TC_DELETE_ENTRY(const IPT_CHAINLABEL chain,
 	return 0;
 }
 
+/* check whether a specified rule is present */
+int TC_CHECK_ENTRY(const IPT_CHAINLABEL chain, const STRUCT_ENTRY *origfw,
+		   unsigned char *matchmask, struct xtc_handle *handle)
+{
+	/* do a dry-run delete to find out whether a matching rule exists */
+	return delete_entry(chain, origfw, matchmask, handle, true);
+}
+
+/* Delete the first rule in `chain' which matches `fw'. */
+int TC_DELETE_ENTRY(const IPT_CHAINLABEL chain,	const STRUCT_ENTRY *origfw,
+		    unsigned char *matchmask, struct xtc_handle *handle)
+{
+	return delete_entry(chain, origfw, matchmask, handle, false);
+}
 
 /* Delete the rule in position `rulenum' in `chain'. */
 int

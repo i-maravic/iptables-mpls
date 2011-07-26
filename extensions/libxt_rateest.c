@@ -8,9 +8,6 @@
 #include <xtables.h>
 #include <linux/netfilter/xt_rateest.h>
 
-/* Ugly hack to pass info to final_check function. We should fix the API */
-static struct xt_rateest_match_info *rateest_info;
-
 static void rateest_help(void)
 {
 	printf(
@@ -65,11 +62,11 @@ static const struct rate_suffix {
 	{ "bit",	1. },
 	{ "Kibit",	1024. },
 	{ "kbit",	1000. },
-	{ "mibit",	1024.*1024. },
+	{ "Mibit",	1024.*1024. },
 	{ "mbit",	1000000. },
-	{ "gibit",	1024.*1024.*1024. },
+	{ "Gibit",	1024.*1024.*1024. },
 	{ "gbit",	1000000000. },
-	{ "tibit",	1024.*1024.*1024.*1024. },
+	{ "Tibit",	1024.*1024.*1024.*1024. },
 	{ "tbit",	1000000000000. },
 	{ "Bps",	8. },
 	{ "KiBps",	8.*1024. },
@@ -80,11 +77,11 @@ static const struct rate_suffix {
 	{ "GBps",	8000000000. },
 	{ "TiBps",	8.*1024.*1024.*1024.*1024. },
 	{ "TBps",	8000000000000. },
-	XT_GETOPT_TABLEEND,
+	{NULL},
 };
 
 static int
-rateest_get_rate(u_int32_t *rate, const char *str)
+rateest_get_rate(uint32_t *rate, const char *str)
 {
 	char *p;
 	double bps = strtod(str, &p);
@@ -115,11 +112,8 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 	struct xt_rateest_match_info *info = (void *)(*match)->data;
 	unsigned int val;
 
-	rateest_info = info;
-
 	switch (c) {
 	case OPT_RATEEST1:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
 		if (invert)
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: rateest can't be inverted");
@@ -133,7 +127,6 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		break;
 
 	case OPT_RATEEST2:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
 		if (invert)
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: rateest can't be inverted");
@@ -148,7 +141,6 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		break;
 
 	case OPT_RATEEST_BPS1:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
 		if (invert)
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: rateest-bps can't be inverted");
@@ -172,7 +164,6 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		break;
 
 	case OPT_RATEEST_PPS1:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
 		if (invert)
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: rateest-pps can't be inverted");
@@ -197,7 +188,6 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		break;
 
 	case OPT_RATEEST_BPS2:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
 		if (invert)
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: rateest-bps can't be inverted");
@@ -221,7 +211,6 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		break;
 
 	case OPT_RATEEST_PPS2:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
 		if (invert)
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: rateest-pps can't be inverted");
@@ -246,7 +235,6 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		break;
 
 	case OPT_RATEEST_DELTA:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
 		if (invert)
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: rateest-delta can't be inverted");
@@ -260,8 +248,6 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		break;
 
 	case OPT_RATEEST_EQ:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
-
 		if (*flags & (1 << c))
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: can't specify lt/gt/eq twice");
@@ -273,8 +259,6 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		break;
 
 	case OPT_RATEEST_LT:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
-
 		if (*flags & (1 << c))
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: can't specify lt/gt/eq twice");
@@ -286,8 +270,6 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		break;
 
 	case OPT_RATEEST_GT:
-		xtables_check_inverse(optarg, &invert, &optind, 0, argv);
-
 		if (*flags & (1 << c))
 			xtables_error(PARAMETER_PROBLEM,
 				   "rateest: can't specify lt/gt/eq twice");
@@ -297,18 +279,14 @@ rateest_parse(int c, char **argv, int invert, unsigned int *flags,
 		if (invert)
 			info->flags |= XT_RATEEST_MATCH_INVERT;
 		break;
-
-	default:
-		return 0;
 	}
 
 	return 1;
 }
 
-static void
-rateest_final_check(unsigned int flags)
+static void rateest_final_check(struct xt_fcheck_call *cb)
 {
-	struct xt_rateest_match_info *info = rateest_info;
+	struct xt_rateest_match_info *info = cb->data;
 
 	if (info == NULL)
 		xtables_error(PARAMETER_PROBLEM, "rateest match: "
@@ -318,18 +296,18 @@ rateest_final_check(unsigned int flags)
 }
 
 static void
-rateest_print_rate(u_int32_t rate, int numeric)
+rateest_print_rate(uint32_t rate, int numeric)
 {
 	double tmp = (double)rate*8;
 
 	if (numeric)
-		printf("%u ", rate);
+		printf(" %u", rate);
 	else if (tmp >= 1000.0*1000000.0)
-		printf("%.0fMbit ", tmp/1000000.0);
+		printf(" %.0fMbit", tmp/1000000.0);
 	else if (tmp >= 1000.0 * 1000.0)
-		printf("%.0fKbit ", tmp/1000.0);
+		printf(" %.0fKbit", tmp/1000.0);
 	else
-		printf("%.0fbit ", tmp);
+		printf(" %.0fbit", tmp);
 }
 
 static void
@@ -337,17 +315,17 @@ rateest_print_mode(const struct xt_rateest_match_info *info,
                    const char *prefix)
 {
 	if (info->flags & XT_RATEEST_MATCH_INVERT)
-		printf("! ");
+		printf(" !");
 
 	switch (info->mode) {
 	case XT_RATEEST_MATCH_EQ:
-		printf("%seq ", prefix);
+		printf(" %seq", prefix);
 		break;
 	case XT_RATEEST_MATCH_LT:
-		printf("%slt ", prefix);
+		printf(" %slt", prefix);
 		break;
 	case XT_RATEEST_MATCH_GT:
-		printf("%sgt ", prefix);
+		printf(" %sgt", prefix);
 		break;
 	default:
 		exit(1);
@@ -359,14 +337,14 @@ rateest_print(const void *ip, const struct xt_entry_match *match, int numeric)
 {
 	const struct xt_rateest_match_info *info = (const void *)match->data;
 
-	printf("rateest match ");
+	printf(" rateest match ");
 
-	printf("%s ", info->name1);
+	printf("%s", info->name1);
 	if (info->flags & XT_RATEEST_MATCH_DELTA)
-		printf("delta ");
+		printf(" delta");
 
 	if (info->flags & XT_RATEEST_MATCH_BPS) {
-		printf("bps ");
+		printf(" bps");
 		if (info->flags & XT_RATEEST_MATCH_DELTA)
 			rateest_print_rate(info->bps1, numeric);
 		if (info->flags & XT_RATEEST_MATCH_ABS) {
@@ -375,31 +353,31 @@ rateest_print(const void *ip, const struct xt_entry_match *match, int numeric)
 		}
 	}
 	if (info->flags & XT_RATEEST_MATCH_PPS) {
-		printf("pps ");
+		printf(" pps");
 		if (info->flags & XT_RATEEST_MATCH_DELTA)
-			printf("%u ", info->pps1);
+			printf(" %u", info->pps1);
 		if (info->flags & XT_RATEEST_MATCH_ABS) {
 			rateest_print_mode(info, "");
-			printf("%u ", info->pps2);
+			printf(" %u", info->pps2);
 		}
 	}
 
 	if (info->flags & XT_RATEEST_MATCH_REL) {
 		rateest_print_mode(info, "");
 
-		printf("%s ", info->name2);
+		printf(" %s", info->name2);
 		if (info->flags & XT_RATEEST_MATCH_DELTA)
-			printf("delta ");
+			printf(" delta");
 
 		if (info->flags & XT_RATEEST_MATCH_BPS) {
-			printf("bps ");
+			printf(" bps");
 			if (info->flags & XT_RATEEST_MATCH_DELTA)
 				rateest_print_rate(info->bps2, numeric);
 		}
 		if (info->flags & XT_RATEEST_MATCH_PPS) {
-			printf("pps ");
+			printf(" pps");
 			if (info->flags & XT_RATEEST_MATCH_DELTA)
-				printf("%u ", info->pps2);
+				printf(" %u", info->pps2);
 		}
 	}
 }
@@ -410,26 +388,26 @@ rateest_save(const void *ip, const struct xt_entry_match *match)
 	const struct xt_rateest_match_info *info = (const void *)match->data;
 
 	if (info->flags & XT_RATEEST_MATCH_REL) {
-		printf("--rateest1 %s ", info->name1);
+		printf(" --rateest1 %s", info->name1);
 		if (info->flags & XT_RATEEST_MATCH_BPS)
-			printf("--rateest-bps ");
+			printf(" --rateest-bps");
 		if (info->flags & XT_RATEEST_MATCH_PPS)
-			printf("--rateest-pps ");
-		rateest_print_mode(info, "--rateest-");
-		printf("--rateest2 %s ", info->name2);
+			printf(" --rateest-pps");
+		rateest_print_mode(info, " --rateest-");
+		printf(" --rateest2 %s", info->name2);
 	} else {
-		printf("--rateest %s ", info->name1);
+		printf(" --rateest %s", info->name1);
 		if (info->flags & XT_RATEEST_MATCH_BPS) {
-			printf("--rateest-bps1 ");
+			printf(" --rateest-bps1");
 			rateest_print_rate(info->bps1, 0);
-			printf("--rateest-bps2 ");
+			printf(" --rateest-bps2");
 			rateest_print_rate(info->bps2, 0);
 			rateest_print_mode(info, "--rateest-");
 		}
 		if (info->flags & XT_RATEEST_MATCH_PPS) {
-			printf("--rateest-pps ");
+			printf(" --rateest-pps");
 			rateest_print_mode(info, "--rateest-");
-			printf("%u ", info->pps2);
+			printf(" %u", info->pps2);
 		}
 	}
 }
@@ -442,7 +420,7 @@ static struct xtables_match rateest_mt_reg = {
 	.userspacesize	= XT_ALIGN(offsetof(struct xt_rateest_match_info, est1)),
 	.help		= rateest_help,
 	.parse		= rateest_parse,
-	.final_check	= rateest_final_check,
+	.x6_fcheck	= rateest_final_check,
 	.print		= rateest_print,
 	.save		= rateest_save,
 	.extra_opts	= rateest_opts,

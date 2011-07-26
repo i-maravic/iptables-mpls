@@ -15,15 +15,6 @@
 extern "C" {
 #endif
 
-#ifndef IPT_MIN_ALIGN
-/* ipt_entry has pointers and u_int64_t's in it, so if you align to
-   it, you'll also align to any crazy matches and targets someone
-   might write */
-#define IPT_MIN_ALIGN (__alignof__(struct ipt_entry))
-#endif
-
-#define IPT_ALIGN(s) (((s) + ((IPT_MIN_ALIGN)-1)) & ~((IPT_MIN_ALIGN)-1))
-
 struct iptc_handle;
 
 typedef char ipt_chainlabel[32];
@@ -86,6 +77,12 @@ int iptc_replace_entry(const ipt_chainlabel chain,
    rulenum = length of chain. */
 int iptc_append_entry(const ipt_chainlabel chain,
 		      const struct ipt_entry *e,
+		      struct iptc_handle *handle);
+
+/* Check whether a mathching rule exists */
+int iptc_check_entry(const ipt_chainlabel chain,
+		      const struct ipt_entry *origfw,
+		      unsigned char *matchmask,
 		      struct iptc_handle *handle);
 
 /* Delete the first rule in `chain' which matches `e', subject to

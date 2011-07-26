@@ -13,6 +13,7 @@ Makefile
 Makefile.in
 
 /extensions/GNUmakefile
+/extensions/initext.c
 /extensions/initext?.c
 /extensions/matches?.man
 /extensions/targets?.man
@@ -35,19 +36,3 @@ Makefile.in
 /ltmain.sh
 /missing
 /stamp-h1
-/libiptc.pc
-/xtables.pc
-
-/ip6tables
-/ip6tables.8
-/ip6tables-multi
-/ip6tables-save
-/ip6tables-restore
-/ip6tables-static
-/iptables
-/iptables.8
-/iptables-multi
-/iptables-save
-/iptables-restore
-/iptables-static
-/iptables-xml

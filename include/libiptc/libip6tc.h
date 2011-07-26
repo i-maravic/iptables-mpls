@@ -11,11 +11,6 @@
 #endif
 #include <linux/netfilter_ipv6/ip6_tables.h>
 
-#ifndef IP6T_MIN_ALIGN
-#define IP6T_MIN_ALIGN (__alignof__(struct ip6t_entry))
-#endif
-#define IP6T_ALIGN(s) (((s) + (IP6T_MIN_ALIGN-1)) & ~(IP6T_MIN_ALIGN-1))
-
 struct ip6tc_handle;
 
 typedef char ip6t_chainlabel[32];
@@ -78,6 +73,12 @@ int ip6tc_replace_entry(const ip6t_chainlabel chain,
    rulenum = length of chain. */
 int ip6tc_append_entry(const ip6t_chainlabel chain,
 		       const struct ip6t_entry *e,
+		       struct ip6tc_handle *handle);
+
+/* Check whether a matching rule exists */
+int ip6tc_check_entry(const ip6t_chainlabel chain,
+		       const struct ip6t_entry *origfw,
+		       unsigned char *matchmask,
 		       struct ip6tc_handle *handle);
 
 /* Delete the first rule in `chain' which matches `fw'. */

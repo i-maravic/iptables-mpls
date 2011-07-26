@@ -76,6 +76,7 @@ typedef unsigned int socklen_t;
 #define TC_INSERT_ENTRY		iptc_insert_entry
 #define TC_REPLACE_ENTRY	iptc_replace_entry
 #define TC_APPEND_ENTRY		iptc_append_entry
+#define TC_CHECK_ENTRY		iptc_check_entry
 #define TC_DELETE_ENTRY		iptc_delete_entry
 #define TC_DELETE_NUM_ENTRY	iptc_delete_num_entry
 #define TC_FLUSH_ENTRIES	iptc_flush_entries
@@ -111,7 +112,7 @@ typedef unsigned int socklen_t;
 #define LABEL_DROP		IPTC_LABEL_DROP
 #define LABEL_QUEUE		IPTC_LABEL_QUEUE
 
-#define ALIGN			IPT_ALIGN
+#define ALIGN			XT_ALIGN
 #define RETURN			IPT_RETURN
 
 #include "libiptc.c"
@@ -208,7 +209,7 @@ is_same(const STRUCT_ENTRY *a, const STRUCT_ENTRY *b, unsigned char *matchmask)
 	mptr = matchmask + sizeof(STRUCT_ENTRY);
 	if (IPT_MATCH_ITERATE(a, match_different, a->elems, b->elems, &mptr))
 		return NULL;
-	mptr += IPT_ALIGN(sizeof(struct ipt_entry_target));
+	mptr += XT_ALIGN(sizeof(struct ipt_entry_target));
 
 	return mptr;
 }
@@ -220,8 +221,8 @@ unconditional(const struct ipt_ip *ip)
 {
 	unsigned int i;
 
-	for (i = 0; i < sizeof(*ip)/sizeof(u_int32_t); i++)
-		if (((u_int32_t *)ip)[i])
+	for (i = 0; i < sizeof(*ip)/sizeof(uint32_t); i++)
+		if (((uint32_t *)ip)[i])
 			return 0;
 
 	return 1;

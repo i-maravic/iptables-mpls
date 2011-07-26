@@ -7,15 +7,15 @@
 #include <iptables/internal.h>
 
 /* Your shared library should call one of these. */
-extern int do_command(int argc, char *argv[], char **table,
+extern int do_command4(int argc, char *argv[], char **table,
 		      struct iptc_handle **handle);
-extern int delete_chain(const ipt_chainlabel chain, int verbose,
+extern int delete_chain4(const ipt_chainlabel chain, int verbose,
 			struct iptc_handle *handle);
-extern int flush_entries(const ipt_chainlabel chain, int verbose, 
+extern int flush_entries4(const ipt_chainlabel chain, int verbose, 
 			struct iptc_handle *handle);
-extern int for_each_chain(int (*fn)(const ipt_chainlabel, int, struct iptc_handle *),
+extern int for_each_chain4(int (*fn)(const ipt_chainlabel, int, struct iptc_handle *),
 		int verbose, int builtinstoo, struct iptc_handle *handle);
-extern void print_rule(const struct ipt_entry *e,
+extern void print_rule4(const struct ipt_entry *e,
 		struct iptc_handle *handle, const char *chain, int counters);
 
 /* kernel revision handling */

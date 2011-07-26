@@ -1,11 +1,9 @@
 /* Code to convert iptables-save format to xml format,
  * (C) 2006 Ufo Mechanic <azez@ufomechanic.net>
- * based on iptables-restor (C) 2000-2002 by Harald Welte <laforge@gnumonks.org>
+ * based on iptables-restore (C) 2000-2002 by Harald Welte <laforge@gnumonks.org>
  * based on previous code from Rusty Russell <rusty@linuxcare.com.au>
  *
  * This code is distributed under the terms of GNU GPL v2
- *
- * $Id: iptables-xml.c,v 1.4 2006/11/09 12:02:17 azez Exp $
  */
 
 #include <getopt.h>
@@ -16,7 +14,7 @@
 #include <stdarg.h>
 #include "iptables.h"
 #include "libiptc/libiptc.h"
-#include "iptables-multi.h"
+#include "xtables-multi.h"
 #include <xtables.h>
 
 #ifdef DEBUG
@@ -375,7 +373,6 @@ do_rule_part(char *leveltag1, char *leveltag2, int part, int argc,
 {
 	int arg = 1;		// ignore leading -A
 	char invert_next = 0;
-	char *thisChain = NULL;
 	char *spacer = "";	// space when needed to assemble arguments
 	char *level1 = NULL;
 	char *level2 = NULL;
@@ -398,8 +395,6 @@ do_rule_part(char *leveltag1, char *leveltag2, int part, int argc,
 			xmlAttrS("type", (TAG)); \
 		} else printf("%s<%s ", (leveli ## LEVEL), (level ## LEVEL)); \
 	} while(0)
-
-	thisChain = argv[arg++];
 
 	if (part == 1) {	/* skip */
 		/* use argvattr to tell which arguments were quoted 
@@ -653,7 +648,7 @@ main(int argc, char *argv[])
 	}
 
 	if (optind == argc - 1) {
-		in = fopen(argv[optind], "r");
+		in = fopen(argv[optind], "re");
 		if (!in) {
 			fprintf(stderr, "Can't open %s: %s", argv[optind],
 				strerror(errno));
@@ -846,7 +841,7 @@ main(int argc, char *argv[])
 				}
 			}
 
-			DEBUGP("calling do_command(%u, argv, &%s, handle):\n",
+			DEBUGP("calling do_command4(%u, argv, &%s, handle):\n",
 			       newargc, curTable);
 
 			for (a = 0; a < newargc; a++)
@@ -870,8 +865,7 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (in != NULL)
-		fclose(in);
+	fclose(in);
 	printf("</iptables-rules>\n");
 	free_argv();
 

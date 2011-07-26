@@ -14,11 +14,14 @@ xtlibdir    := @xtlibdir@
 CC             := @CC@
 CCLD           := ${CC}
 CFLAGS         := @CFLAGS@
+CPPFLAGS       := @CPPFLAGS@
 LDFLAGS        := @LDFLAGS@
 regular_CFLAGS := @regular_CFLAGS@
-kinclude_CFLAGS := @kinclude_CFLAGS@
+regular_CPPFLAGS := @regular_CPPFLAGS@
+kinclude_CPPFLAGS := @kinclude_CPPFLAGS@
 
-AM_CFLAGS      := ${regular_CFLAGS} -I${top_builddir}/include -I${top_srcdir}/include ${kinclude_CFLAGS}
+AM_CFLAGS      := ${regular_CFLAGS}
+AM_CPPFLAGS     = ${regular_CPPFLAGS} -I${top_builddir}/include -I${top_srcdir}/include ${kinclude_CPPFLAGS}
 AM_DEPFLAGS     = -Wp,-MMD,$(@D)/.$(@F).d,-MT,$@
 
 ifeq (${V},)
@@ -51,11 +54,13 @@ pf6_solibs    := $(patsubst %,libip6t_%.so,${pf6_build_mod})
 #
 # Building blocks
 #
-targets := libext4.a libext6.a matches4.man matches6.man \
+targets := libext.a libext4.a libext6.a \
+           matches4.man matches6.man \
            targets4.man targets6.man
 targets_install :=
-@ENABLE_STATIC_TRUE@ libext4_objs := ${pfx_objs} ${pf4_objs}
-@ENABLE_STATIC_TRUE@ libext6_objs := ${pfx_objs} ${pf6_objs}
+@ENABLE_STATIC_TRUE@ libext_objs := ${pfx_objs}
+@ENABLE_STATIC_TRUE@ libext4_objs := ${pf4_objs}
+@ENABLE_STATIC_TRUE@ libext6_objs := ${pf6_objs}
 @ENABLE_STATIC_FALSE@ targets += ${pfx_solibs} ${pf4_solibs} ${pf6_solibs}
 @ENABLE_STATIC_FALSE@ targets_install += ${pfx_solibs} ${pf4_solibs} ${pf6_solibs}
 
@@ -70,13 +75,13 @@ install: ${targets_install}
 	if test -n "${targets_install}"; then install -pm0755 $^ "${DESTDIR}${xtlibdir}/"; fi;
 
 clean:
-	rm -f *.o *.oo *.so *.a {matches,targets}[46].man initext4.c initext6.c;
+	rm -f *.o *.oo *.so *.a {matches,targets}[46].man initext.c initext4.c initext6.c;
 
 distclean: clean
 	rm -f .*.d .*.dd;
 
 init%.o: init%.c
-	${AM_VERBOSE_CC} ${CC} ${AM_DEPFLAGS} ${AM_CFLAGS} -D_INIT=$*_init ${CFLAGS} -o $@ -c $<;
+	${AM_VERBOSE_CC} ${CC} ${AM_CPPFLAGS} ${AM_DEPFLAGS} ${AM_CFLAGS} -D_INIT=$*_init ${CFLAGS} -o $@ -c $<;
 
 -include .*.d
 
@@ -88,7 +93,7 @@ lib%.so: lib%.oo
 	${AM_VERBOSE_CCLD} ${CCLD} ${AM_LDFLAGS} -shared ${LDFLAGS} -o $@ $<;
 
 lib%.oo: ${srcdir}/lib%.c
-	${AM_VERBOSE_CC} ${CC} ${AM_DEPFLAGS} ${AM_CFLAGS} -D_INIT=lib$*_init -DPIC -fPIC ${CFLAGS} -o $@ -c $<;
+	${AM_VERBOSE_CC} ${CC} ${AM_CPPFLAGS} ${AM_DEPFLAGS} ${AM_CFLAGS} -D_INIT=lib$*_init -DPIC -fPIC ${CFLAGS} -o $@ -c $<;
 
 
 #
@@ -99,7 +104,10 @@ lib%.oo: ${srcdir}/lib%.c
 #	handling code in the Makefiles.
 #
 lib%.o: ${srcdir}/lib%.c
-	${AM_VERBOSE_CC} ${CC} ${AM_DEPFLAGS} ${AM_CFLAGS} -DNO_SHARED_LIBS=1 -D_INIT=lib$*_init ${CFLAGS} -o $@ -c $<;
+	${AM_VERBOSE_CC} ${CC} ${AM_CPPFLAGS} ${AM_DEPFLAGS} ${AM_CFLAGS} -DNO_SHARED_LIBS=1 -D_INIT=lib$*_init ${CFLAGS} -o $@ -c $<;
+
+libext.a: initext.o ${libext_objs}
+	${AM_VERBOSE_AR} ${AR} crs $@ $^;
 
 libext4.a: initext4.o ${libext4_objs}
 	${AM_VERBOSE_AR} ${AR} crs $@ $^;
@@ -107,11 +115,17 @@ libext4.a: initext4.o ${libext4_objs}
 libext6.a: initext6.o ${libext6_objs}
 	${AM_VERBOSE_AR} ${AR} crs $@ $^;
 
-initext_func  := $(addprefix xt_,${pfx_build_mod}) $(addprefix ipt_,${pf4_build_mod})
-initext6_func := $(addprefix xt_,${pfx_build_mod}) $(addprefix ip6t_,${pf6_build_mod})
+initext_func  := $(addprefix xt_,${pfx_build_mod})
+initext4_func := $(addprefix ipt_,${pf4_build_mod})
+initext6_func := $(addprefix ip6t_,${pf6_build_mod})
+
+.initext.dd: FORCE
+	@echo "${initext_func}" >$@.tmp; \
+	cmp -s $@ $@.tmp || mv $@.tmp $@; \
+	rm -f $@.tmp;
 
 .initext4.dd: FORCE
-	@echo "${initext_func}" >$@.tmp; \
+	@echo "${initext4_func}" >$@.tmp; \
 	cmp -s $@ $@.tmp || mv $@.tmp $@; \
 	rm -f $@.tmp;
 
@@ -120,7 +134,7 @@ initext6_func := $(addprefix xt_,${pfx_build_mod}) $(addprefix ip6t_,${pf6_build
 	cmp -s $@ $@.tmp || mv $@.tmp $@; \
 	rm -f $@.tmp;
 
-initext4.c: .initext4.dd
+initext.c: .initext.dd
 	${AM_VERBOSE_GEN}
 	@( \
 	echo "" >$@; \
@@ -136,6 +150,22 @@ initext4.c: .initext4.dd
 	echo "}" >>$@; \
 	);
 
+initext4.c: .initext4.dd
+	${AM_VERBOSE_GEN}
+	@( \
+	echo "" >$@; \
+	for i in ${initext4_func}; do \
+		echo "extern void lib$${i}_init(void);" >>$@; \
+	done; \
+	echo "void init_extensions4(void);" >>$@; \
+	echo "void init_extensions4(void)" >>$@; \
+	echo "{" >>$@; \
+	for i in ${initext4_func}; do \
+		echo  " ""lib$${i}_init();" >>$@; \
+	done; \
+	echo "}" >>$@; \
+	);
+
 initext6.c: .initext6.dd
 	${AM_VERBOSE_GEN}
 	@( \
@@ -143,8 +173,8 @@ initext6.c: .initext6.dd
 	for i in ${initext6_func}; do \
 		echo "extern void lib$${i}_init(void);" >>$@; \
 	done; \
-	echo "void init_extensions(void);" >>$@; \
-	echo "void init_extensions(void)" >>$@; \
+	echo "void init_extensions6(void);" >>$@; \
+	echo "void init_extensions6(void)" >>$@; \
 	echo "{" >>$@; \
 	for i in ${initext6_func}; do \
 		echo " ""lib$${i}_init();" >>$@; \
@@ -155,8 +185,8 @@ initext6.c: .initext6.dd
 #
 #	Manual pages
 #
-ex_matches = $(sort $(shell echo $(1) | LC_ALL=POSIX grep -Eo '\b[[:alnum:]]+\b'))
-ex_targets = $(sort $(shell echo $(1) | LC_ALL=POSIX grep -Eo '\b[[:alnum:]]+\b'))
+ex_matches = $(sort $(shell echo $(1) | LC_ALL=POSIX grep -Eo '\b[[:lower:][:digit:]_]+\b'))
+ex_targets = $(sort $(shell echo $(1) | LC_ALL=POSIX grep -Eo '\b[[:upper:][:digit:]_]+\b'))
 man_run    = \
 	${AM_VERBOSE_GEN} \
 	for ext in $(1); do \
@@ -177,14 +207,14 @@ man_run    = \
 		fi; \
 	done >$@;
 
-matches4.man: .initext4.dd $(wildcard ${srcdir}/lib*.man)
+matches4.man: .initext.dd .initext4.dd $(wildcard ${srcdir}/lib*.man)
 	$(call man_run,$(call ex_matches,${pfx_build_mod} ${pf4_build_mod}),ip,NFPROTO_IPV4)
 
-matches6.man: .initext6.dd $(wildcard ${srcdir}/lib*.man)
+matches6.man: .initext.dd .initext6.dd $(wildcard ${srcdir}/lib*.man)
 	$(call man_run,$(call ex_matches,${pfx_build_mod} ${pf6_build_mod}),ip6,NFPROTO_IPV6)
 
-targets4.man: .initext4.dd $(wildcard ${srcdir}/lib*.man)
+targets4.man: .initext.dd .initext4.dd $(wildcard ${srcdir}/lib*.man)
 	$(call man_run,$(call ex_targets,${pfx_build_mod} ${pf4_build_mod}),ip,NFPROTO_IPV4)
 
-targets6.man: .initext6.dd $(wildcard ${srcdir}/lib*.man)
+targets6.man: .initext.dd .initext6.dd $(wildcard ${srcdir}/lib*.man)
 	$(call man_run,$(call ex_targets,${pfx_build_mod} ${pf6_build_mod}),ip6,NFPROTO_IPV6)
