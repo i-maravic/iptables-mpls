@@ -1,7 +1,7 @@
 #ifndef _XT_MPLS_H_target
 #define _XT_MPLS_H_target
 
-struct xt_mpls_target_info {
+struct xt_MPLS_target_info {
 	u_int32_t key;
 
 	/* only used by the netfilter kernel modules */

@@ -7,14 +7,14 @@
 
 #include <xtables.h>
 #include <linux/netfilter/x_tables.h>
-#include <linux/netfilter/xt_mpls.h>
+#include <linux/netfilter/xt_MPLS.h>
 #include <linux/mpls.h>
 
 /* Function which prints out usage message. */
 static void help(void)
 {
 	printf(
-"mpls target options:\n"
+"MPLS target options:\n"
 "  --nhlfe key		      Set an outgoing MPLS NHLFE\n");
 }
 
@@ -29,8 +29,8 @@ static int
 parse(int c, char **argv, int invert, unsigned int *flags,
       const void *entry, struct xt_entry_target **target)
 {
-	struct xt_mpls_target_info *mpls_info
-		= (struct xt_mpls_target_info *)(*target)->data;
+	struct xt_MPLS_target_info *mpls_info
+		= (struct xt_MPLS_target_info *)(*target)->data;
 
 	switch (c) {
 	case '1':
@@ -65,52 +65,51 @@ static void final_check(unsigned int flags)
 static void print(const void *ip,
                   const struct xt_entry_target *target, int numeric)
 {
-	const struct xt_mpls_target_info *mpls_info =
-		(const struct xt_mpls_target_info *)target->data;
+	const struct xt_MPLS_target_info *mpls_info =
+		(const struct xt_MPLS_target_info *)target->data;
 	printf("nhlfe 0x%x ", mpls_info->key);
 }
 
 /* Saves the union ipt_targinfo in parsable form to stdout. */
 static void save(const void *ip, const struct xt_entry_target *target)
 {
-	const struct xt_mpls_target_info *mpls_info =
-		(const struct xt_mpls_target_info *)target->data;
+	const struct xt_MPLS_target_info *mpls_info =
+		(const struct xt_MPLS_target_info *)target->data;
 
 	printf("--nhlfe 0x%x ", mpls_info->key);
 }
-
-static struct xtables_target mpls4 = {
-	.family		= AF_INET,
-	.name		= "mpls",
-	.version	= XTABLES_VERSION,
-	.revision	= 0,
-	.size		= XT_ALIGN(sizeof(struct xt_mpls_target_info)),
-	.userspacesize	= XT_ALIGN(sizeof(struct xt_mpls_target_info)),
-	.help		= &help,
-	.parse		= &parse,
-	.final_check	= &final_check,
-	.print		= &print,
-	.save		= &save,
-	.extra_opts	= opts
+static struct xtables_target mpls_tg_reg[] = {
+		{
+				.family		= NFPROTO_IPV4,
+				.name		= "MPLS",
+				.version	= XTABLES_VERSION,
+				.revision	= 0,
+				.size		= XT_ALIGN(sizeof(struct xt_MPLS_target_info)),
+				.userspacesize	= XT_ALIGN(sizeof(struct xt_MPLS_target_info)),
+				.help		= &help,
+				.parse		= &parse,
+				.final_check	= &final_check,
+				.print		= &print,
+				.save		= &save,
+				.extra_opts	= opts
+		},
+		{
+				.family		= NFPROTO_IPV6,
+				.name		= "MPLS",
+				.version	= XTABLES_VERSION,
+				.revision	= 0,
+				.size		= XT_ALIGN(sizeof(struct xt_MPLS_target_info)),
+				.userspacesize	= XT_ALIGN(sizeof(struct xt_MPLS_target_info)),
+				.help		= &help,
+				.parse		= &parse,
+				.final_check	= &final_check,
+				.print		= &print,
+				.save		= &save,
+				.extra_opts	= opts
+		}
 };
 
-static struct xtables_target mpls6 = {
-	.family		= AF_INET6,
-	.name		= "mpls",
-	.version	= XTABLES_VERSION,
-	.revision	= 0,
-	.size		= XT_ALIGN(sizeof(struct xt_mpls_target_info)),
-	.userspacesize	= XT_ALIGN(sizeof(struct xt_mpls_target_info)),
-	.help		= &help,
-	.parse		= &parse,
-	.final_check	= &final_check,
-	.print		= &print,
-	.save		= &save,
-	.extra_opts	= opts
-};
-
-void __attribute((constructor)) nf_ext_init(void)
+void _init(void)
 {
-	xtables_register_target(&mpls4);
-	xtables_register_target(&mpls6);
+	xtables_register_targets(mpls_tg_reg, ARRAY_SIZE(mpls_tg_reg));
 }

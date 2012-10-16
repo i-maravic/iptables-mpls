@@ -6,7 +6,7 @@
  * Authors:
  *          James Leu        <jleu@mindspring.com>
  *          Ramon Casellas   <casellas@infres.enst.fr>
- *
+ *          Igor Maravić	 <igorm@etf.rs> - Innovation Center, School of Electrical Engineering in Belgrade
  *   (c) 1999-2004   James Leu        <jleu@mindspring.com>
  *   (c) 2003-2004   Ramon Casellas   <casellas@infres.enst.fr>
  *
@@ -18,80 +18,51 @@
  *      modify it under the terms of the GNU General Public License
  *      as published by the Free Software Foundation; either version
  *      2 of the License, or (at your option) any later version.
- ****************************************************************************/
+ *
+****************************************************************************/
 
 #ifndef _LINUX_MPLS_H_
 #define _LINUX_MPLS_H_
 
-#ifdef __KERNEL__
 #include <linux/socket.h>
+#if defined __KERNEL__ || (!(defined __KERNEL__) && !(defined _NET_IF_H))
 #include <linux/if.h>
 #else
-#include <sys/socket.h>
-#include <linux/types.h>
 #include <net/if.h>
 #endif
 
-#define AF_MPLS         28      /* MPLS sockets                 */
-#define PF_MPLS         AF_MPLS
-#define ARPHRD_MPLS_TUNNEL 899
 
-enum {
-        MPLS_CMD_UNSPEC,
-        MPLS_CMD_NEWILM,
-        MPLS_CMD_DELILM,
-        MPLS_CMD_GETILM,
-        MPLS_CMD_NEWNHLFE,
-        MPLS_CMD_DELNHLFE,
-        MPLS_CMD_GETNHLFE,
-        MPLS_CMD_NEWXC,
-        MPLS_CMD_DELXC,
-        MPLS_CMD_GETXC,
-        MPLS_CMD_SETLABELSPACE,
-        MPLS_CMD_GETLABELSPACE,
-        __MPLS_CMD_MAX,
-};
+/**
+*MPLS DEBUGGING
+**/
 
-#define MPLS_CMD_MAX (__MPLS_CMD_MAX - 1)
+#define MPLS_LINUX_VERSION	0x01090900
 
-enum {
-        MPLS_ATTR_UNSPEC,
-        MPLS_ATTR_ILM,
-        MPLS_ATTR_NHLFE,
-        MPLS_ATTR_XC,
-        MPLS_ATTR_LABELSPACE,
-        MPLS_ATTR_INSTR,
-        MPLS_ATTR_STATS,
-        __MPLS_ATTR_MAX,
-};
+/*based on netlink_group_mask from net/netlink/af_netlink.c */
+#define _group_mask(group_id) group_id ? 1 << (group_id - 1) : 0
 
-#define MPLS_ATTR_MAX (__MPLS_ATTR_MAX - 1)
+#define MPLS_NETLINK_NAME         "nlmpls"
+#define	MPLS_GRP_ILM_NAME	      "ilm_mcast_grp"
+#define	MPLS_GRP_NHLFE_NAME	      "nhlfe_mcast_grp"
+#define	MPLS_GRP_XC_NAME	      "xc_mcast_grp"
+#define	MPLS_GRP_LABELSPACE_NAME  "lspace_mcast_grp"
+#define MPLS_GRP_GET_NAME         "get_mcast_grp"
 
-#define MPLS_NUM_OPS		8
-
-#define MPLS_LINUX_VERSION	0x01090701
-
-#define	MPLS_GRP_ILM	1
-#define	MPLS_GRP_NHLFE	2
-#define	MPLS_GRP_XC	4
-#define	MPLS_GRP_LABELSPACE 8
-
-#define MPLS_IPV4_EXPLICIT_NULL	0       /* only valid as sole label stack entry
+#define MPLS_IPV4_EXPLICIT_NULL  0   /* only valid as sole label stack entry
 					   Pop label and send to IPv4 stack */
-#define MPLS_ROUTER_ALERT	1       /* anywhere except bottom, packet it is
+#define MPLS_ROUTER_ALERT  1       /* anywhere except bottom, packet it is
 					   forwared to a software module
 					   determined by the next label,
 					   if the packet is forwarded, push this
 					   label back on */
-#define MPLS_IPV6_EXPLICIT_NULL	2       /* only valid as sole label stack entry
+#define MPLS_IPV6_EXPLICIT_NULL  2    /* only valid as sole label stack entry
 					   Pop label and send to IPv6 stack */
-#define MPLS_IMPLICIT_NULL	3       /* a LIB with this, signifies to pop
+#define MPLS_IMPLICIT_NULL  3       /* a LIB with this, signifies to pop
 					   the next label and use that */
 
 #define MPLS_CHANGE_MTU		0x01
 #define MPLS_CHANGE_PROP_TTL	0x02
 #define MPLS_CHANGE_INSTR	0x04
-#define MPLS_CHANGE_PROTO	0x10
 
 enum mpls_dir {
 	MPLS_IN = 0x10,
@@ -99,17 +70,15 @@ enum mpls_dir {
 };
 
 enum mpls_opcode_enum {
-	MPLS_OP_NOP = 0x00,
+	MPLS_OP_DROP = 0x00,
 	MPLS_OP_POP,
 	MPLS_OP_PEEK,
 	MPLS_OP_PUSH,
-	MPLS_OP_DLV,
 	MPLS_OP_FWD,
 	MPLS_OP_NF_FWD,
 	MPLS_OP_DS_FWD,
 	MPLS_OP_EXP_FWD,
 	MPLS_OP_SET,
-	MPLS_OP_SET_RX,
 	MPLS_OP_SET_TC,
 	MPLS_OP_SET_DS,
 	MPLS_OP_SET_EXP,
@@ -118,7 +87,6 @@ enum mpls_opcode_enum {
 	MPLS_OP_TC2EXP,
 	MPLS_OP_DS2EXP,
 	MPLS_OP_NF2EXP,
-	MPLS_OP_SET_NF,
 	MPLS_OP_MAX
 };
 
@@ -129,7 +97,7 @@ enum mpls_label_type_enum {
 	MPLS_LABEL_KEY
 };
 
-#define MPLS_SHIM_SIZE 4
+#define MPLS_HDR_LEN  4
 
 struct mpls_label_atm {
 	u_int16_t  mla_vpi;
@@ -144,13 +112,13 @@ struct mpls_label {
 		u_int32_t ml_fr;
 		struct mpls_label_atm ml_atm;
 	} u;
-	int ml_index;
+	int ml_labelspace;
 };
 
 struct mpls_in_label_req {
-	unsigned int      mil_proto;
 	struct mpls_label mil_label;
 	unsigned char     mil_change_flag;
+	unsigned char     mil_owner;   /* Routing protocol */
 };
 
 #define MPLS_LABELSPACE_MAX	255
@@ -162,44 +130,51 @@ struct mpls_labelspace_req {
 
 struct mpls_nexthop_info {
 	unsigned int    mni_if;
-	struct sockaddr mni_addr;
+	union {
+		struct sockaddr			common;
+		struct sockaddr_in		ipv4;
+		struct sockaddr_in6		ipv6;
+	} mni_nh;
 };
+#define mni_addr mni_nh.common
 
 struct mpls_out_label_req {
 	struct mpls_label mol_label;
 	u_int32_t         mol_mtu;
 	int8_t            mol_propagate_ttl;
 	unsigned char     mol_change_flag;
+	unsigned char     mol_owner;        /* Routing protocol */
 };
 
 struct mpls_xconnect_req {
 	struct mpls_label mx_in;
 	struct mpls_label mx_out;
+	unsigned char     mx_owner;        /* Routing protocol */
 };
 
 struct mpls_tunnel_req {
-	char mt_ifname[IFNAMSIZ];
+	char         mt_ifname[IFNAMSIZ];
 	unsigned int mt_nhlfe_key;
 };
 
 #define MPLS_NFMARK_NUM 64
 
 struct mpls_nfmark_fwd {
-	unsigned int nf_key[MPLS_NFMARK_NUM];
+	unsigned int   nf_key[MPLS_NFMARK_NUM];
 	unsigned short nf_mask;
 };
 
 #define MPLS_DSMARK_NUM 64
 
 struct mpls_dsmark_fwd {
-	unsigned int df_key[MPLS_DSMARK_NUM];
+	unsigned int  df_key[MPLS_DSMARK_NUM];
 	unsigned char df_mask;
 };
 
 #define MPLS_TCINDEX_NUM 64
 
 struct mpls_tcindex_fwd {
-	unsigned int tc_key[MPLS_TCINDEX_NUM];
+	unsigned int   tc_key[MPLS_TCINDEX_NUM];
 	unsigned short tc_mask;
 };
 
@@ -234,7 +209,7 @@ struct mpls_nfmark2exp {
 
 struct mpls_instr_elem {
 	unsigned short mir_opcode;
-	unsigned char mir_direction;
+	unsigned char  mir_direction;
 	union {
 		struct mpls_label        push;
 		struct mpls_label        fwd;
@@ -251,7 +226,6 @@ struct mpls_instr_elem {
 		struct mpls_tcindex2exp  tc2exp;
 		struct mpls_dsmark2exp   ds2exp;
 		struct mpls_nfmark2exp   nf2exp;
-		unsigned long            set_nf;
 	} mir_data;
 };
 
@@ -267,7 +241,6 @@ struct mpls_instr_elem {
 #define mir_set_tx     mir_data.set_tx
 #define mir_set_ds     mir_data.set_ds
 #define mir_set_exp    mir_data.set_exp
-#define mir_set_nf     mir_data.set_nf
 #define mir_exp2tc     mir_data.exp2tc
 #define mir_exp2ds     mir_data.exp2ds
 #define mir_tc2exp     mir_data.tc2exp
@@ -275,11 +248,40 @@ struct mpls_instr_elem {
 #define mir_nf2exp     mir_data.nf2exp
 
 struct mpls_instr_req {
-	struct mpls_instr_elem       mir_instr[MPLS_NUM_OPS];
 	unsigned char                mir_instr_length;
 	unsigned char                mir_direction;
-	int                          mir_index;
-	struct mpls_label            mir_label;
+	struct mpls_instr_elem       mir_instr[0];
 };
+
+/* genetlink interface */
+enum {
+	MPLS_CMD_UNSPEC,
+	MPLS_CMD_NEWILM,
+	MPLS_CMD_DELILM,
+	MPLS_CMD_GETILM,
+	MPLS_CMD_NEWNHLFE,
+	MPLS_CMD_DELNHLFE,
+	MPLS_CMD_GETNHLFE,
+	MPLS_CMD_NEWXC,
+	MPLS_CMD_DELXC,
+	MPLS_CMD_GETXC,
+	MPLS_CMD_SETLABELSPACE,
+	MPLS_CMD_GETLABELSPACE,
+	__MPLS_CMD_MAX,
+};
+
+#define MPLS_CMD_MAX (__MPLS_CMD_MAX - 1)
+
+enum {
+	MPLS_ATTR_UNSPEC,
+	MPLS_ATTR_ILM,
+	MPLS_ATTR_NHLFE,
+	MPLS_ATTR_XC,
+	MPLS_ATTR_LABELSPACE,
+	MPLS_ATTR_INSTR,
+	__MPLS_ATTR_MAX,
+};
+
+#define MPLS_ATTR_MAX (__MPLS_ATTR_MAX - 1)
 
 #endif
